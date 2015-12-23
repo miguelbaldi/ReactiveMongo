@@ -1,5 +1,7 @@
 package reactivemongo.core.nodeset
 
+import org.jboss.netty.handler.timeout.ReadTimeoutHandler
+import org.jboss.netty.util.HashedWheelTimer
 import reactivemongo.core.protocol.Request
 import akka.actor.ActorRef
 import scala.annotation.tailrec
@@ -8,7 +10,7 @@ import java.util.concurrent.{ Executor, Executors }
 import reactivemongo.utils.LazyLogger
 import org.jboss.netty.channel.socket.nio.NioClientSocketChannelFactory
 import org.jboss.netty.buffer.HeapChannelBufferFactory
-import org.jboss.netty.channel.{ Channel, ChannelPipeline, Channels }
+import org.jboss.netty.channel.{ChannelFuture, Channel, ChannelPipeline, Channels}
 import reactivemongo.core.protocol._
 import reactivemongo.api.{ MongoConnectionOptions, ReadPreference }
 import reactivemongo.bson._
@@ -170,11 +172,15 @@ case class Connection(
     channel.write(message)
     channel.write(writeConcern)
   }
-  def send(message: Request) {
+  def send(message: Request): ChannelFuture = {
     channel.write(message)
   }
 
   def isAuthenticated(db: String, user: String) = authenticated.exists(auth => auth.user == user && auth.db == db)
+
+  override def toString: String = {
+    s"\n[Channel=${channel.getId}, Status=${status.toString}, Address=${channel.getLocalAddress}|${channel.getRemoteAddress}]"
+  }
 }
 
 case class PingInfo(
@@ -312,9 +318,10 @@ class ChannelFactory(options: MongoConnectionOptions, bossExecutor: Executor = E
 
   private val bufferFactory = new HeapChannelBufferFactory(java.nio.ByteOrder.LITTLE_ENDIAN)
 
-  private def makePipeline(receiver: ActorRef): ChannelPipeline = Channels.pipeline(new RequestEncoder(), new ResponseFrameDecoder(), new ResponseDecoder(), new MongoHandler(receiver))
+  private def makePipeline(receiver: ActorRef): ChannelPipeline = Channels.pipeline(new ReadTimeoutHandler(new HashedWheelTimer(), 30),new RequestEncoder(), new ResponseFrameDecoder(), new ResponseDecoder(), new MongoHandler(receiver))
 
   private def makeChannel(receiver: ActorRef): Channel = {
+    logger.trace(s"makeChannelWithReadTimeout[tcpNoDelay=${options.tcpNoDelay}, keepAlive=${options.keepAlive}, connectTimeoutMillis=${options.connectTimeoutMS}]")
     val channel = channelFactory.newChannel(makePipeline(receiver))
     val config = channel.getConfig
     config.setTcpNoDelay(options.tcpNoDelay)

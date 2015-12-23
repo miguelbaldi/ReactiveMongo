@@ -16,6 +16,7 @@
 package reactivemongo.core.actors
 
 import akka.actor._
+import org.jboss.netty.channel.ChannelFuture
 import org.jboss.netty.channel.group._
 import reactivemongo.core.errors._
 import reactivemongo.core.protocol._
@@ -317,8 +318,10 @@ class MongoDBSystem(
               connections = connections,
               authenticated = if (connections.isEmpty) Set.empty else node.authenticated)
           })
+          logger.trace(s"[SAS]Channel #$channelId closed. NodeSet status: ${nodeSet.toString}")
         case _: ChannelDisconnected =>
           updateNodeSetOnDisconnect(channelId)
+          logger.trace(s"[SAS]Channel #$channelId disconnected. NodeSet status: ${nodeSet.toString}")
       }
       awaitingResponses.retain { (_, awaitingResponse) =>
         if (awaitingResponse.channelID == channelId) {
@@ -351,6 +354,7 @@ class MongoDBSystem(
           logger.error(s"error while processing isMaster response #${response.header.responseTo}", e)
         },
         isMaster => {
+          logger.trace(s"isMasterResponse[${isMaster}][channel=${response.info.channelId}, node=${isMaster.me}, hosts=${isMaster.hosts}]")
           val ns = nodeSet.updateNodeByChannelId(response.info.channelId) { node =>
             val pingInfo =
               if (node.pingInfo.lastIsMasterId == response.header.responseTo)
@@ -439,6 +443,7 @@ class MongoDBSystem(
       awaitingResponses.get(response.header.responseTo) match {
         case Some(AwaitingResponse(_, _, promise, isGetLastError)) => {
           logger.debug("Got a response from " + response.info.channelId + "! Will give back message=" + response + " to promise " + promise)
+          logger.trace(s"[SAS]response[error=${response.error}]")
           awaitingResponses -= response.header.responseTo
           if (response.error.isDefined) {
             logger.debug("{" + response.header.responseTo + "} sending a failure... (" + response.error.get + ")")
@@ -485,8 +490,10 @@ class MongoDBSystem(
   // <-- monitor
 
   def onPrimaryUnavailable() {
+    logger.trace(s"[SAS]onPrimaryUnavailable")
     self ! RefreshAllNodes
     updateNodeSet(nodeSet.updateAll(node => if (node.status == NodeStatus.Primary) node.copy(status = NodeStatus.Unknown) else node))
+    logger.trace(s"[SAS]onPrimaryUnavailable. NodeSet status: ${nodeSet.toString}")
     broadcastMonitors(PrimaryUnavailable)
   }
 
@@ -545,7 +552,7 @@ class MongoDBSystem(
 
   def sendIsMaster(node: Node, id: Int) = {
     node.connected.headOption.map { channel =>
-      channel.send(IsMaster().maker(id))
+      val f: ChannelFuture = channel.send(IsMaster().maker(id))
       if (node.pingInfo.lastIsMasterId == -1) {
         node.copy(pingInfo = node.pingInfo.copy(lastIsMasterTime = System.currentTimeMillis(), lastIsMasterId = id))
       } else if (node.pingInfo.lastIsMasterId >= PingInfo.pingTimeout) {
