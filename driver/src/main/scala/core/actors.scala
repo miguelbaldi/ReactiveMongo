@@ -18,6 +18,7 @@ package reactivemongo.core.actors
 import akka.actor._
 import org.jboss.netty.channel.ChannelFuture
 import org.jboss.netty.channel.group._
+import org.jboss.netty.util.HashedWheelTimer
 import reactivemongo.core.errors._
 import reactivemongo.core.protocol._
 import reactivemongo.utils.LazyLogger
@@ -98,7 +99,7 @@ class MongoDBSystem(
     seeds: Seq[String],
     initialAuthenticates: Seq[Authenticate],
     options: MongoConnectionOptions)
-    (channelFactory: ChannelFactory = new ChannelFactory(options)) extends Actor {
+    (channelFactory: ChannelFactory = new ChannelFactory(options, timer = MongoDBSystem.timer)) extends Actor {
   import MongoDBSystem._
 
   private implicit val cFactory = channelFactory
@@ -609,7 +610,9 @@ case class AuthRequest(authenticate: Authenticate, promise: Promise[SuccessfulAu
 object MongoDBSystem {
   private[actors] val DefaultConnectionRetryInterval: Int = 2000 // milliseconds
   private val logger = LazyLogger("reactivemongo.core.actors.MongoDBSystem")
+  val timer = new HashedWheelTimer()
 }
+
 
 private[actors] case class AwaitingResponse(
   requestID: Int,
